@@ -4,7 +4,14 @@ Does knowing a request's prompt length help schedule LLM inference requests, com
 
 ## Finding
 
-At 90% load, an oracle that knows output length roughly halves mean latency compared with first-come-first-served. Ordering by prompt length instead captures none of that gain and ends up worse than first-come-first-served. Even the oracle has a worse p99 than first-come-first-served. Prompt length and output length are nearly uncorrelated in this trace (Spearman 0.07), which is why prompt length doesn't work as a stand-in for output length.
+At 90% load:
+
+- An oracle that knows output length roughly halves mean latency vs FCFS.
+- Ordering by prompt length gets none of that gain, it's actually worse than FCFS.
+- Even the oracle has a worse p99 than FCFS, so a better mean isn't free.
+- Prompt length and output length are basically uncorrelated (Spearman 0.07).
+
+Why prompt-length ordering loses to FCFS instead of just doing nothing: mid-length prompts have the longest outputs in this trace (third quartile averages ~408 output tokens vs ~114-195 for the rest), so sorting by prompt length pushes the longest jobs to the front instead of the back. Random order gives roughly the same mean as FCFS, as expected.
 
 ## Figure
 
@@ -22,6 +29,8 @@ Install dependencies, then run:
 pip install -r requirements.txt
 python llm_sched_sim.py AzureLLMInferenceTrace_conv.csv 0.7 0.9 --plot
 ```
+
+For the vLLM check, open vllm_check.ipynb in Colab with a T4 GPU.
 
 ## Results
 
@@ -63,6 +72,21 @@ Single server, no batching. Preemption is free, with no cost for keeping or reco
 ## Next
 
 I'd extend this to batched serving with KV-cache preemption costs, using a vLLM-based simulator instead of this single-server model. I'd also want to test how much of the oracle gain a learned length predictor recovers against these baselines, given the same signals.
+
+## vLLM check
+
+The replay assumes free preemption. To see what that leaves out, I sent a burst of the first 200 trace requests (real prompt and output lengths, submitted at once) through vLLM 0.6.3 on a Colab T4 GPU with Qwen2.5-0.5B-Instruct, at two KV-cache memory levels.
+
+| gpu_memory_utilization | mean (s) | p99 (s) | preemptions |
+|---|---|---|---|
+| 0.90 | 18.37 | 25.62 | 0 |
+| 0.25 | 17.75 | 33.59 | 6 |
+
+![vLLM check run on Colab](vllm_check.png)
+
+With less KV-cache memory, mean latency barely changed but p99 latency rose 31%: preemption cost falls on a few requests, which is the tail effect the replay misses.
+
+Limitations: one small model, one GPU, 200 requests submitted as a burst (not replayed at trace arrival times), single run.
 
 ## Data source
 
